@@ -1,0 +1,370 @@
+#include <stdint.h>
+#include <stdbool.h>
+#include <string.h>
+// includes da biblioteca driverlib
+#include "inc/hw_memmap.h"
+#include "driverlib/gpio.h"
+#include "driverlib/uart.h"
+#include "driverlib/sysctl.h"
+#include "driverlib/systick.h"
+#include "driverlib/pin_map.h"
+#include "utils/uartstdio.h"
+#include "cmsis_os2.h" // CMSIS-RTOS
+#include "system_TM4C1294.h" 
+
+osThreadId_t tid_elevC;             /* Thread id of thread: phase_a      */
+osThreadId_t tid_elevD;               /* Thread id of thread: phase_b      */
+osThreadId_t tid_elevE;               /* Thread id of thread: phase_c      */
+osThreadId_t tid_control;               /* Thread id of thread: phase_d      */
+osThreadId_t tid_clock;                 /* Thread id of thread: clock        */
+osThreadId_t tid_UART_READ, tid_UART_WRITE;
+  
+
+
+osMessageQueueId_t fila_e_id,fila_d_id,fila_c_id,fila_escrita_id;
+
+void UART_WRITE(void *arg);
+void UART_READ(void *arg);
+
+
+//ASSIM MANDA MSG PARA FILA DE ESCRITA
+//    char comando[2];
+//    comando[0]=qualElevador;  essa posição vem da struct
+//    comando[1]='a';//abrir
+//    osMessageQueuePut(fila_escrita_id, comando, NULL, osWaitForever);
+
+
+//ASSIM PEGA MSG DA FILA
+//osMessageQueueGet(e.fila, comando ,NULL, osWaitForever);
+//e.fila coloca qual a fila q irá pegar a comando, comando
+
+//EXEMPLO COMO SABER QUAL FILA
+//if(e.qualElevador=='e')
+//  {
+//    e.fila=fila_esq_id;
+//  }
+//  else if(e.qualElevador=='c')
+//  {
+//    e.fila=fila_cen_id;
+//  }
+//  else if(e.qualElevador=='d')
+//  {
+//    e.fila=fila_dir_id;
+//  }
+
+//
+//void elevador(void *arg){
+//  
+//  elevador_estrutura e;
+//  e.andar=0;
+//  e.estado=parado;
+//  e.qualElevador=(char)(arg); //O argumento é uma struct então e.qualElevador vai receber o argumento que é char da estrutura
+//  e.paradas=0x00;
+//  e.chamadas=0x00;
+
+
+//elevador_esq_id = osThreadNew(elevador, (void*)'e', NULL);
+//elevador_cen_id = osThreadNew(elevador, (void*)'c', NULL);
+//elevador_dir_id = osThreadNew(elevador, (void*)'d', NULL);
+ 
+
+typedef enum{parado,subindo,descendo
+}estado_elevador;
+
+typedef struct {
+  int andar; //usado para andar atual
+  char posicao; //qual elevador
+  estado_elevador estado; //os 3 estados possíveis parado, subindo e descendo
+  uint16_t paradas;       //paradas botão interno
+  uint16_t chamadas;      //chamadas do botão externo
+  osMessageQueueId_t fila;  //é a fila de msg de cada elevador
+}elevador_estrutura;
+
+
+/*----------------------------------------------------------------------------
+ *      Thread 1 'elevC': Elevador Central
+ *---------------------------------------------------------------------------*/
+void elevC (void *argument) {
+  elevador_estrutura elevador;
+  elevador.andar=0;
+  elevador.estado= parado;
+  elevador.paradas=0x00;
+  elevador.chamadas=0x00;
+  uint8_t i;
+  uint8_t aux_andar
+  char comando[2];
+  char mensagem[10];    
+  
+  //ENVIA RESET
+  comando[0]='c'; //Qual elevador
+  comando[1]='r';//resetar
+  osMessageQueuePut(fila_escrita_id, comando, NULL, osWaitForever);
+  
+  //FECHAR AS PORTAS
+  comando[0]='c';
+  comando[1]='f';//fechar
+  osMessageQueuePut(fila_escrita_id, comando, NULL, osWaitForever);
+
+
+         
+  for (;;) {
+    osMessageQueueGet(fila_d_id, mensagem ,NULL, osWaitForever);//elevador.fila = elevador c
+    
+    if(mensagem[1]=='E'){//botao externo
+      sscanf(mensagem,"%*c%*c%d%*c", &aux_andar);  
+      if(elevador.andar < aux_andar){
+         comando[0]='c'; //Qual elevador
+         comando[1]='s';//subir
+         osMessageQueuePut(fila_escrita_id, comando, NULL, osWaitForever);
+      }
+      else if(elevador.andar > aux_andar){
+         comando[0]='c'; //Qual elevador
+         comando[1]='d';//descer
+         osMessageQueuePut(fila_escrita_id, comando, NULL, osWaitForever);
+      }
+      else{
+         comando[0]='c'; //Qual elevador
+         comando[1]='p';//parar
+         osMessageQueuePut(fila_escrita_id, comando, NULL, osWaitForever);
+         
+         comando[0]='c'; //Qual elevador
+         comando[1]='a';//subir
+         osMessageQueuePut(fila_escrita_id, comando, NULL, osWaitForever);
+      }
+   }    
+    else if(mensagem[1]=='I')//botao interno
+    {
+        
+    }
+    else if(mensagem[1]>='0' && mensagem[1]<='9') //informação  do andar
+    {
+    }
+    
+    }//for 
+   // osThreadFlagsWait(0x0001, osFlagsWaitAny ,osWaitForever);    /* wait for an event flag 0x0001 */ 
+  }
+
+
+/*----------------------------------------------------------------------------
+ *      Thread 2 'elevD': Elevador Direito
+ *---------------------------------------------------------------------------*/
+void elevD (void *argument) {
+  elevador_estrutura elevador;
+  elevador.andar=0;
+  elevador.estado='p';
+  elevador.qualElevador=(char)(argument);
+  elevador.paradas=0x00;
+  
+  
+  if(elevador.qualElevador=='e')
+  {
+    elevador.fila=fila_e_id;
+  }
+  else if(elevador.qualElevador=='c')
+  {
+    elevador.fila=fila_c_id;
+  }
+  else if(elevador.qualElevador=='d')
+  {
+    elevador.fila=fila_d_id;
+  }
+  //ENVIA RESET
+  char comando[2];
+  comando[0]=elevador.qualElevador; //Qual elevador
+  comando[1]='r';//resetar
+  osMessageQueuePut(fila_escrita_id, comando, NULL, osWaitForever);
+  
+  //FECHAR AS PORTAS
+  comando[0]=elevador.qualElevador;
+  comando[1]='f';//fechar
+  osMessageQueuePut(fila_escrita_id, comando, NULL, osWaitForever);
+
+  char mensagem[10];  
+  
+  for (;;) {
+    osMessageQueueGet(elevador.fila, mensagem ,NULL, osWaitForever);
+    if(mensagem[1]=='E')//botao externo
+    {
+    
+    }
+    else if(mensagem[1]=='I')//botao interno
+    {
+      
+    }
+    else if(mensagem[1]>='0' && mensagem[1]<='9') //informação  do andar
+    {
+    }
+    
+    }//for 
+   // osThreadFlagsWait(0x0001, osFlagsWaitAny ,osWaitForever);    /* wait for an event flag 0x0001 */ 
+}
+
+/*----------------------------------------------------------------------------
+ *      Thread 3 'elevE': Elevador Esquerdo
+ *---------------------------------------------------------------------------*/
+void elevE (void *argument) {
+  elevador_estrutura elevador;
+  elevador.andar=0;
+  elevador.estado='p';
+  elevador.qualElevador=(char)(argument);
+  elevador.paradas=0x00;
+  
+  
+  if(elevador.qualElevador=='e')
+  {
+    elevador.fila=fila_e_id;
+  }
+  else if(elevador.qualElevador=='c')
+  {
+    elevador.fila=fila_c_id;
+  }
+  else if(elevador.qualElevador=='d')
+  {
+    elevador.fila=fila_d_id;
+  }
+  //ENVIA RESET
+  char comando[2];
+  comando[0]=elevador.qualElevador; //Qual elevador
+  comando[1]='r';//resetar
+  osMessageQueuePut(fila_escrita_id, comando, NULL, osWaitForever);
+  
+  //FECHAR AS PORTAS
+  comando[0]=elevador.qualElevador;
+  comando[1]='f';//fechar
+  osMessageQueuePut(fila_escrita_id, comando, NULL, osWaitForever);
+
+  char mensagem[10];  
+  
+  for (;;) {
+    osMessageQueueGet(elevador.fila, mensagem ,NULL, osWaitForever);
+    if(mensagem[1]=='E')//botao externo
+    {
+    
+    }
+    else if(mensagem[1]=='I')//botao interno
+    {
+      
+    }
+    else if(mensagem[1]>='0' && mensagem[1]<='9') //informação  do andar
+    {
+    }
+    
+    }//for 
+   // osThreadFlagsWait(0x0001, osFlagsWaitAny ,osWaitForever);    /* wait for an event flag 0x0001 */ 
+}
+
+/*----------------------------------------------------------------------------
+ *      Thread 4 'control': Thread de controle
+ *---------------------------------------------------------------------------*/
+void control (void *argument) {
+int32_t osKernelLock();
+  for (;;) {
+    }//inicializa
+    }
+/*----------------------------------------------------------------------------
+ *      Main: Initialize and start RTX Kernel
+ *---------------------------------------------------------------------------*/
+void app_main (void *argument) {
+  tid_elevC = osThreadNew(elevC, NULL, NULL);
+  tid_elevD = osThreadNew(elevD, NULL, NULL);
+  tid_elevE = osThreadNew(elevE, NULL, NULL);
+  
+  tid_control = osThreadNew(control, NULL, NULL);  
+  
+  tid_UART_READ= osThreadNew(UART_READ, NULL, NULL);
+  tid_UART_WRITE= osThreadNew(UART_WRITE, NULL, NULL);
+  
+  
+  
+  fila_e_id =  osMessageQueueNew (15, sizeof(char)*6,NULL);
+  fila_c_id =  osMessageQueueNew (15, sizeof(char)*6,NULL); 
+  fila_d_id =  osMessageQueueNew (15, sizeof(char)*6,NULL);
+  
+  fila_escrita_id =  osMessageQueueNew (30, sizeof(char)*3,NULL);
+
+  
+  
+ 
+//    
+//  fila_control = osMessageQueueNew(8, 8, NULL) ;
+//  fila_elevC = osMessageQueueNew(8, 8, NULL) ;
+//  fila_elevD = osMessageQueueNew(8, 8, NULL) ;
+//  fila_elevE = osMessageQueueNew(8, 8, NULL) ;
+ 
+  osThreadFlagsSet(tid_elevC, 0x0001);          /* set signal to phaseA thread   */
+
+  osDelay(osWaitForever);
+  while(1);
+}
+
+
+extern void UARTStdioIntHandler(void);
+
+void UARTInit(void){
+  // Enable the GPIO Peripheral used by the UART.
+  SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA);
+  while(!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOA));
+
+  // Enable UART0
+  SysCtlPeripheralEnable(SYSCTL_PERIPH_UART0);
+  while(!SysCtlPeripheralReady(SYSCTL_PERIPH_UART0));
+
+  // Configure GPIO Pins for UART mode.
+  GPIOPinConfigure(GPIO_PA0_U0RX);
+  GPIOPinConfigure(GPIO_PA1_U0TX);
+  GPIOPinTypeUART(GPIO_PORTA_BASE, GPIO_PIN_0 | GPIO_PIN_1);
+
+  // Initialize the UART for console I/O.
+  UARTStdioConfig(0, 9600, SystemCoreClock);
+} // UARTInit
+
+
+void UART_WRITE(void *arg){
+  
+  
+  char msg[2];
+  while(1){
+    osMessageQueueGet(fila_escrita_id, msg ,NULL, osWaitForever);
+    UARTprintf("%c%c\n\r",msg[0],msg[1]); 
+  } 
+} 
+
+void UART_READ(void *arg){
+  char msg[6];
+  while(1){
+    UARTgets(msg,20);
+    if(msg[0]=='e')
+    {
+      osMessageQueuePut(fila_e_id, msg, NULL, 0);
+    }
+    else if(msg[0]=='c')
+    {
+      osMessageQueuePut(fila_c_id, msg, NULL, 0);
+    }
+    else if(msg[0]=='d')
+    {
+      osMessageQueuePut(fila_d_id, msg, NULL, 0);
+    }  
+    osThreadYield();
+  } 
+} 
+
+
+void main(void){
+  //UART initialization
+  UARTInit();
+  
+    // System Initialization
+  osKernelInitialize();                 // Initialize CMSIS-RTOS
+  osThreadNew(app_main, NULL, NULL);    // Create application main thread
+  if (osKernelGetState() == osKernelReady) {
+    osKernelStart();                    // Start thread execution
+  }
+  
+ 
+      
+    
+  
+  while(1);
+  
+} // main
